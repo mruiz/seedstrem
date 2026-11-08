@@ -4,6 +4,7 @@ package prowlarr
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -417,11 +418,15 @@ func normalize(r apiResult) Result {
 		Categories: parseCategories(r.Categories),
 		Freeleech:  isFreeleech(r),
 	}
-	res.InfoHash = strings.ToLower(strings.TrimSpace(r.InfoHash))
+	res.InfoHash = cleanInfoHash(r.InfoHash)
 
 	if res.MagnetURL != "" {
 		if hash, _, err := metainfo.FromMagnet(res.MagnetURL); err == nil {
 			res.InfoHash = hash
+		} else {
+			// Unusable btih: play would reject it, so rebuild from the
+			// infohash or fall back to the .torrent download.
+			res.MagnetURL = ""
 		}
 	}
 	if res.MagnetURL == "" && res.InfoHash != "" {
@@ -429,6 +434,25 @@ func normalize(r apiResult) Result {
 		res.MagnetURL = synthesizeMagnet(res.InfoHash, r.Title, nil)
 	}
 	return res
+}
+
+// cleanInfoHash returns h as a 40-char lowercase hex infohash, or "" when
+// it isn't one. Some indexers (e.g. UNIT3D APIs via Prowlarr) hex-encode
+// the hex string again, yielding 80 chars; those are decoded once.
+func cleanInfoHash(h string) string {
+	h = strings.ToLower(strings.TrimSpace(h))
+	if len(h) == 80 {
+		if b, err := hex.DecodeString(h); err == nil {
+			h = string(b)
+		}
+	}
+	if len(h) != 40 {
+		return ""
+	}
+	if _, err := hex.DecodeString(h); err != nil {
+		return ""
+	}
+	return h
 }
 
 // parseCategories decodes Prowlarr categories which may be either a list

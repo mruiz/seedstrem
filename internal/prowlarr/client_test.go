@@ -2,6 +2,7 @@ package prowlarr
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -454,4 +455,25 @@ func indexerTitles(results []Result) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+func TestNormalizeDoubleHexInfoHash(t *testing.T) {
+	doubled := fmt.Sprintf("%x", hexHash) // indexer hex-encoded the hex string
+	for name, r := range map[string]apiResult{
+		"infohash only": {Title: "T", InfoHash: strings.ToUpper(doubled)},
+		"bad magnet":    {Title: "T", InfoHash: doubled, MagnetURL: "magnet:?xt=urn:btih:" + doubled},
+	} {
+		res := normalize(r)
+		if res.InfoHash != hexHash {
+			t.Errorf("%s: infohash = %q, want %q", name, res.InfoHash, hexHash)
+		}
+		if !strings.HasPrefix(res.MagnetURL, "magnet:?xt=urn:btih:"+hexHash+"&") {
+			t.Errorf("%s: magnet = %q", name, res.MagnetURL)
+		}
+	}
+
+	// Unrecoverable hash: no magnet, so Search falls back to downloadUrl.
+	if res := normalize(apiResult{Title: "T", InfoHash: "not-a-hash"}); res.InfoHash != "" || res.MagnetURL != "" {
+		t.Errorf("invalid hash kept: %+v", res)
+	}
 }
