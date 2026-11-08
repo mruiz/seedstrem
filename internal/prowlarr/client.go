@@ -34,6 +34,11 @@ type Result struct {
 	// metadata fetch, which is unreliable for private-tracker peers. Nil
 	// when the release already had a magnet/infohash.
 	TorrentFile []byte
+	// DownloadURL is the .torrent link of an infohash-only release whose
+	// magnet was synthesized without trackers. Fetching it at play time
+	// (FetchTorrent) supplies the trackers a private torrent needs; it is
+	// deferred so a search does not download every result's .torrent.
+	DownloadURL string
 	Size        int64
 	Seeders     int
 	Categories  []int
@@ -305,6 +310,13 @@ func (c *Client) fetchTorrentHash(ctx context.Context, downloadURL string) (hash
 	return hash, name, trackers, body, nil
 }
 
+// FetchTorrent downloads the .torrent at downloadURL (a Result's
+// DownloadURL) and returns its raw bytes and v1 infohash.
+func (c *Client) FetchTorrent(ctx context.Context, downloadURL string) (raw []byte, hash string, err error) {
+	hash, _, _, raw, err = c.fetchTorrentHash(ctx, downloadURL)
+	return raw, hash, err
+}
+
 // synthesizeMagnet builds a magnet URI from an infohash, optional display
 // name, and optional tracker announce URLs. Trackers matter for private
 // torrents: without a tr= entry qBittorrent has no announce URL and (with
@@ -430,8 +442,9 @@ func normalize(r apiResult) Result {
 		}
 	}
 	if res.MagnetURL == "" && res.InfoHash != "" {
-		// infoHash-only result: no .torrent to read trackers from.
+		// infoHash-only result: no trackers until the .torrent is fetched.
 		res.MagnetURL = synthesizeMagnet(res.InfoHash, r.Title, nil)
+		res.DownloadURL = r.DownloadURL
 	}
 	return res
 }

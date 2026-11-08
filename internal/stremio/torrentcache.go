@@ -16,6 +16,7 @@ const torrentFileCacheMax = 512
 
 type torrentFileEntry struct {
 	raw []byte
+	url string // .torrent link to fetch at play when raw is unknown
 	at  time.Time
 }
 
@@ -50,6 +51,35 @@ func (c *torrentFileCache) put(hash string, raw []byte) {
 		c.evictOldestLocked()
 	}
 	c.entries[hash] = torrentFileEntry{raw: raw, at: c.now()}
+}
+
+// putURL remembers the .torrent link for hash so play can fetch it. It
+// never replaces already-fetched bytes. No-op for empty arguments.
+func (c *torrentFileCache) putURL(hash, url string) {
+	if hash == "" || url == "" {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if e, ok := c.entries[hash]; ok && len(e.raw) > 0 {
+		return
+	}
+	c.evictExpiredLocked()
+	if len(c.entries) >= torrentFileCacheMax {
+		c.evictOldestLocked()
+	}
+	c.entries[hash] = torrentFileEntry{url: url, at: c.now()}
+}
+
+// getURL returns the .torrent link stored by putURL, or "".
+func (c *torrentFileCache) getURL(hash string) string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	e, ok := c.entries[hash]
+	if !ok || c.now().Sub(e.at) > torrentFileCacheTTL {
+		return ""
+	}
+	return e.url
 }
 
 // get returns the cached bytes for hash, or nil if absent/expired. The

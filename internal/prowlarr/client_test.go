@@ -477,3 +477,13 @@ func TestNormalizeDoubleHexInfoHash(t *testing.T) {
 		t.Errorf("invalid hash kept: %+v", res)
 	}
 }
+
+func TestNormalizeKeepsDownloadURLForBareInfoHash(t *testing.T) {
+	res := normalize(apiResult{Title: "T", InfoHash: hexHash, DownloadURL: "http://x/t.torrent"})
+	if res.DownloadURL != "http://x/t.torrent" || !strings.HasPrefix(res.MagnetURL, "magnet:?xt=urn:btih:"+hexHash) {
+		t.Errorf("infohash-only result should keep its .torrent link for play: %+v", res)
+	}
+	if res := normalize(apiResult{MagnetURL: "magnet:?xt=urn:btih:" + hexHash, DownloadURL: "http://x/t.torrent"}); res.DownloadURL != "" {
+		t.Errorf("a real magnet needs no deferred .torrent: %+v", res)
+	}
+}

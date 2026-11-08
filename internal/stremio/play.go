@@ -55,6 +55,9 @@ func (h *Handler) play(w http.ResponseWriter, r *http.Request) {
 	// stream list, add it directly (skips qBittorrent's metadata fetch);
 	// otherwise fall back to the magnet.
 	torrentFile := h.torrentFiles.get(infohash)
+	if torrentFile == nil {
+		torrentFile = h.fetchTorrentFile(r, s, infohash)
+	}
 	link, err := h.svc.Resolve(ctx, magnet, torrentFile, sel)
 	if err != nil {
 		switch {
@@ -74,4 +77,21 @@ func (h *Handler) play(w http.ResponseWriter, r *http.Request) {
 	h.logger.Debug("stremio: play resolved",
 		"infohash", infohash, "file", link.Path, "token", link.Token)
 	http.Redirect(w, r, target, http.StatusFound)
+}
+
+// fetchTorrentFile downloads the .torrent remembered for infohash (an
+// infohash-only release whose magnet has no trackers). Best-effort: on
+// any failure play falls back to the magnet.
+func (h *Handler) fetchTorrentFile(r *http.Request, s Settings, infohash string) []byte {
+	u := h.torrentFiles.getURL(infohash)
+	if u == "" {
+		return nil
+	}
+	raw, hash, err := h.prowlarr(s).FetchTorrent(r.Context(), u)
+	if err != nil || hash != infohash {
+		h.logger.Warn("stremio: .torrent fetch for play failed, using magnet", "infohash", infohash, "gotHash", hash, "error", err)
+		return nil
+	}
+	h.torrentFiles.put(infohash, raw)
+	return raw
 }
