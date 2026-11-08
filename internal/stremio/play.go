@@ -3,6 +3,7 @@ package stremio
 import (
 	"errors"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 
@@ -88,7 +89,15 @@ func (h *Handler) fetchTorrentFile(r *http.Request, s Settings, infohash string)
 		return nil
 	}
 	raw, hash, err := h.prowlarr(s).FetchTorrent(r.Context(), u)
+	if r.Context().Err() != nil {
+		return nil // player hung up; nothing to report
+	}
 	if err != nil || hash != infohash {
+		// The download link carries the Prowlarr API key: never log it.
+		var ue *url.Error
+		if errors.As(err, &ue) {
+			err = ue.Err
+		}
 		h.logger.Warn("stremio: .torrent fetch for play failed, using magnet", "infohash", infohash, "gotHash", hash, "error", err)
 		return nil
 	}
