@@ -173,6 +173,9 @@ func (c *Client) Search(ctx context.Context, query, searchType string, categorie
 				// directly (skipping qBittorrent's unreliable metadata
 				// fetch); the magnet above is the fallback.
 				res.TorrentFile = raw
+			} else if res.InfoHash != "" {
+				// Tracker-less last resort: only DHT/PEX can find peers.
+				res.MagnetURL = synthesizeMagnet(res.InfoHash, r.Title, nil)
 			}
 		}
 		if res.MagnetURL == "" {
@@ -429,8 +432,9 @@ func normalize(r apiResult) Result {
 			res.MagnetURL = ""
 		}
 	}
-	if res.MagnetURL == "" && res.InfoHash != "" {
-		// infoHash-only result: no .torrent to read trackers from.
+	// infoHash-only result: a tracker-less magnet never gets metadata on a
+	// private tracker, so when a .torrent exists Search fetches it instead.
+	if res.MagnetURL == "" && res.InfoHash != "" && r.DownloadURL == "" {
 		res.MagnetURL = synthesizeMagnet(res.InfoHash, r.Title, nil)
 	}
 	return res
