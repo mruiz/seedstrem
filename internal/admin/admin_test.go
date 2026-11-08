@@ -266,6 +266,45 @@ func TestTestQbittorrent(t *testing.T) {
 	}
 }
 
+func TestTestQbittorrentUsesStoredPassword(t *testing.T) {
+	e := newEnv(t)
+	e.login(t)
+
+	qb := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v2/auth/login":
+			r.ParseForm()
+			if r.PostForm.Get("password") != "stored-pw" {
+				w.WriteHeader(http.StatusUnauthorized)
+				return
+			}
+			http.SetCookie(w, &http.Cookie{Name: "SID", Value: "sid"})
+			io.WriteString(w, "Ok.")
+		case "/api/v2/app/version":
+			io.WriteString(w, "v5.0.0")
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer qb.Close()
+
+	cfg := e.config.Get()
+	cfg.QBittorrent.Password = "stored-pw"
+	if err := e.config.Update(cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	// After a save the UI sends the blanked field (""); older UIs send the mask.
+	for _, pw := range []string{"", passwordMask} {
+		w := e.do(t, http.MethodPost, "/config/test-qbittorrent", `{"url":"`+qb.URL+`","username":"admin","password":"`+pw+`"}`)
+		var res map[string]any
+		json.Unmarshal(w.Body.Bytes(), &res)
+		if res["ok"] != true {
+			t.Errorf("password %q: expected stored password to be used: %v", pw, res)
+		}
+	}
+}
+
 func TestProwlarrIndexers(t *testing.T) {
 	e := newEnv(t)
 	e.login(t)
