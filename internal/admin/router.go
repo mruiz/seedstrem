@@ -514,7 +514,8 @@ func (h *Handler) testQbittorrent(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusBadRequest, "invalid JSON")
 		return
 	}
-	if body.Password == passwordMask {
+	// The UI blanks secrets after load/save, so empty also means "use stored".
+	if body.Password == passwordMask || body.Password == "" {
 		body.Password = h.config.Get().QBittorrent.Password
 	}
 
@@ -541,7 +542,8 @@ func (h *Handler) testDeluge(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusBadRequest, "invalid JSON")
 		return
 	}
-	if body.Password == passwordMask {
+	// The UI blanks secrets after load/save, so empty also means "use stored".
+	if body.Password == passwordMask || body.Password == "" {
 		body.Password = h.config.Get().Deluge.Password
 	}
 
