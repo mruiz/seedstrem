@@ -172,6 +172,7 @@ func (h *Handler) stream(w http.ResponseWriter, r *http.Request) {
 		if len(res.TorrentFile) > 0 {
 			h.torrentFiles.put(res.InfoHash, res.TorrentFile)
 		}
+		h.torrentFiles.putURL(res.InfoHash, res.DownloadURL)
 		items = append(items, h.toStreamItem(s.ExternalURL, q, res, progress[res.InfoHash]))
 	}
 	writeJSON(w, http.StatusOK, streamResponse{Streams: items})

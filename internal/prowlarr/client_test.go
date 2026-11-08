@@ -478,30 +478,12 @@ func TestNormalizeDoubleHexInfoHash(t *testing.T) {
 	}
 }
 
-func TestSearchPrefersTorrentFileOverBareInfoHash(t *testing.T) {
-	const tracker = "http://tr.example/announce"
-	torrentBytes := []byte("d8:announce26:" + tracker + "4:infod4:name4:testee")
-	doubled := fmt.Sprintf("%x", hexHash)
-
-	mux := http.NewServeMux()
-	mux.HandleFunc("/api/v1/search", func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte(`[
-			{"title":"Private","infoHash":"` + doubled + `","downloadUrl":"http://` + r.Host + `/file.torrent","protocol":"torrent"},
-			{"title":"Dead link","infoHash":"` + hexHash + `","downloadUrl":"http://` + r.Host + `/missing","protocol":"torrent"}
-		]`))
-	})
-	mux.HandleFunc("/file.torrent", func(w http.ResponseWriter, r *http.Request) { w.Write(torrentBytes) })
-	srv := httptest.NewServer(mux)
-	defer srv.Close()
-
-	results, err := NewWithClient(srv.URL, "k", srv.Client()).Search(context.Background(), "q", "", nil, nil)
-	if err != nil || len(results) != 2 {
-		t.Fatalf("search: %v, %d results", err, len(results))
+func TestNormalizeKeepsDownloadURLForBareInfoHash(t *testing.T) {
+	res := normalize(apiResult{Title: "T", InfoHash: hexHash, DownloadURL: "http://x/t.torrent"})
+	if res.DownloadURL != "http://x/t.torrent" || !strings.HasPrefix(res.MagnetURL, "magnet:?xt=urn:btih:"+hexHash) {
+		t.Errorf("infohash-only result should keep its .torrent link for play: %+v", res)
 	}
-	if results[0].TorrentFile == nil || !strings.Contains(results[0].MagnetURL, "tr=") {
-		t.Errorf("infohash+downloadUrl should use the .torrent (trackers), got %+v", results[0])
-	}
-	if results[1].InfoHash != hexHash || !strings.HasPrefix(results[1].MagnetURL, "magnet:?xt=urn:btih:"+hexHash) {
-		t.Errorf("failed .torrent fetch should fall back to the infohash magnet, got %+v", results[1])
+	if res := normalize(apiResult{MagnetURL: "magnet:?xt=urn:btih:" + hexHash, DownloadURL: "http://x/t.torrent"}); res.DownloadURL != "" {
+		t.Errorf("a real magnet needs no deferred .torrent: %+v", res)
 	}
 }
