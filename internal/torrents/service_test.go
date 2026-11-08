@@ -439,3 +439,39 @@ func TestWaitForMetadataTimeout(t *testing.T) {
 		t.Fatal("expected timeout error")
 	}
 }
+
+// Full-seed mode boosts the played file, but never to 7: libtorrent picks
+// priority-7 pieces rarest-first ahead of its sequential pass, which would
+// break streaming order and drown the first/last-piece boost.
+func TestSelectFullSeedKeepsPlayedFileBelowTopPriority(t *testing.T) {
+	fakeDC := fake.New()
+	db, err := store.Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	svc := New(db, fakeDC, func() Settings {
+		return Settings{MetadataTimeout: 2 * time.Second, SeedFull: true}
+	}, nil)
+
+	fakeDC.Put(&fake.Torrent{
+		Hash:  testHash,
+		State: downloader.StatePaused,
+		Files: []fake.File{{Name: "Movie.nfo", Size: 1 << 10}, {Name: "Movie.2026.1080p.mkv", Size: 8 << 30}},
+	})
+	if _, err := svc.Resolve(context.Background(), testMagnet("Movie"), nil, Selector{}); err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	var sawPlayed bool
+	for _, c := range fakeDC.Calls() {
+		if strings.HasPrefix(c, "filePrio ") && strings.Contains(c, "indices=[1]") {
+			sawPlayed = true
+			if !strings.HasSuffix(c, "priority=6") {
+				t.Errorf("played file priority: %s, want 6", c)
+			}
+		}
+	}
+	if !sawPlayed {
+		t.Errorf("played file priority never set: %v", fakeDC.Calls())
+	}
+}
