@@ -10,6 +10,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/kipsilabs/seedstrem/internal/metainfo"
+	"github.com/kipsilabs/seedstrem/internal/prowlarr"
 	"github.com/kipsilabs/seedstrem/internal/torrents"
 )
 
@@ -22,12 +23,18 @@ func (h *Handler) play(w http.ResponseWriter, r *http.Request) {
 	infohash := strings.ToLower(chi.URLParam(r, "infohash"))
 	magnet := r.URL.Query().Get("magnet")
 
+	var torrentFile []byte
 	if magnet == "" {
-		http.Error(w, "missing magnet", http.StatusBadRequest)
-		return
-	}
-	// Guard: the magnet must match the path infohash.
-	if hash, _, err := metainfo.FromMagnet(magnet); err != nil || hash != infohash {
+		// A magnet-less release was listed unresolved under a key (see
+		// playKey): only now, at play, is its .torrent downloaded.
+		res, ok := h.resolveAtPlay(r, s, infohash)
+		if !ok {
+			http.Error(w, "missing magnet", http.StatusBadRequest)
+			return
+		}
+		infohash, magnet, torrentFile = res.InfoHash, res.MagnetURL, res.TorrentFile
+	} else if hash, _, err := metainfo.FromMagnet(magnet); err != nil || hash != infohash {
+		// Guard: the magnet must match the path infohash.
 		http.Error(w, "magnet does not match infohash", http.StatusBadRequest)
 		return
 	}
@@ -55,7 +62,9 @@ func (h *Handler) play(w http.ResponseWriter, r *http.Request) {
 	// If we cached the raw .torrent for this infohash while building the
 	// stream list, add it directly (skips qBittorrent's metadata fetch);
 	// otherwise fall back to the magnet.
-	torrentFile := h.torrentFiles.get(infohash)
+	if torrentFile == nil {
+		torrentFile = h.torrentFiles.get(infohash)
+	}
 	if torrentFile == nil {
 		torrentFile = h.fetchTorrentFile(r, s, infohash)
 	}
@@ -78,6 +87,31 @@ func (h *Handler) play(w http.ResponseWriter, r *http.Request) {
 	h.logger.Debug("stremio: play resolved",
 		"infohash", infohash, "file", link.Path, "token", link.Token)
 	http.Redirect(w, r, target, http.StatusFound)
+}
+
+// resolveAtPlay downloads the .torrent remembered under key (a playKey of
+// an unresolved release) and derives its infohash and magnet. The bytes
+// are cached under key too, so a HEAD probe followed by the GET, or a
+// replay, costs a single grab. ok is false when the key is unknown
+// (expired, or the server restarted since the listing) or the fetch fails.
+func (h *Handler) resolveAtPlay(r *http.Request, s Settings, key string) (prowlarr.Result, bool) {
+	u := h.torrentFiles.getURL(key)
+	raw := h.torrentFiles.get(key)
+	if u == "" && raw == nil {
+		return prowlarr.Result{}, false
+	}
+	// Resolve drops a release it cannot fetch and never logs the link,
+	// which carries the Prowlarr API key.
+	res := h.prowlarr(s).Resolve(r.Context(), []prowlarr.Result{{DownloadURL: u, TorrentFile: raw}})
+	if len(res) == 0 {
+		if r.Context().Err() == nil {
+			h.logger.Warn("stremio: .torrent fetch for play failed", "key", key)
+		}
+		return prowlarr.Result{}, false
+	}
+	h.torrentFiles.put(key, res[0].TorrentFile)
+	h.torrentFiles.put(res[0].InfoHash, res[0].TorrentFile)
+	return res[0], true
 }
 
 // fetchTorrentFile downloads the .torrent remembered for infohash (an

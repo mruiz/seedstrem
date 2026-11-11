@@ -2,6 +2,8 @@ package stremio
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -88,7 +90,6 @@ func (h *Handler) stream(w http.ResponseWriter, r *http.Request) {
 	if s.MaxResults > 0 && len(results) > s.MaxResults {
 		results = results[:s.MaxResults]
 	}
-	results = h.resolve(ctx, results, s)
 
 	// Disk-usage gate: once the download disk is too full, withhold NEW
 	// releases (and drop any whose size would push it past the threshold).
@@ -167,13 +168,9 @@ func (h *Handler) stream(w http.ResponseWriter, r *http.Request) {
 		items = append(items, r.item)
 	}
 	for _, res := range fresh {
-		// Stash any raw .torrent we already fetched (magnet-less
-		// releases) so the play handler can add it directly instead of a
-		// metadata-less magnet.
-		if len(res.TorrentFile) > 0 {
-			h.torrentFiles.put(res.InfoHash, res.TorrentFile)
-		}
-		h.torrentFiles.putURL(res.InfoHash, res.DownloadURL)
+		// Remember the .torrent link server-side (it carries the Prowlarr
+		// API key) so play fetches it: listing never downloads a .torrent.
+		h.torrentFiles.putURL(playKey(res), res.DownloadURL)
 		items = append(items, h.toStreamItem(s.ExternalURL, q, res, progress[res.InfoHash]))
 	}
 	writeJSON(w, http.StatusOK, streamResponse{Streams: items})
@@ -242,31 +239,6 @@ func (h *Handler) discoverySearch(ctx context.Context, q meta.Query, s Settings)
 		return results, nil
 	})
 	return slices.Clone(results), err
-}
-
-// resolve completes the magnet-less releases left after ranking and the
-// result cap (see prowlarr.Resolve), so only offered releases cost a
-// .torrent grab. Fetched .torrents are cached by download URL: a repeated
-// stream request re-derives the hash locally instead of grabbing again.
-// Bounded by the search timeout so a slow grab can't exceed the caller's
-// fetch timeout; a release not resolved in time is dropped.
-func (h *Handler) resolve(ctx context.Context, results []prowlarr.Result, s Settings) []prowlarr.Result {
-	if s.Prowlarr.SearchTimeout > 0 {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, s.Prowlarr.SearchTimeout)
-		defer cancel()
-	}
-	for i := range results {
-		if results[i].MagnetURL == "" {
-			results[i].TorrentFile = h.torrentFiles.get(results[i].DownloadURL)
-		}
-	}
-	results = h.prowlarr(s).Resolve(ctx, results)
-	for _, r := range results {
-		h.torrentFiles.put(r.DownloadURL, r.TorrentFile)
-	}
-	// Two indexers may carry the same release; only now is its hash known.
-	return prowlarr.Dedup(results)
 }
 
 // applyDiskGate filters NEW Prowlarr candidates against the configured
@@ -609,10 +581,23 @@ func buildTextSearch(q meta.Query, title string, year int, p ProwlarrSettings) (
 // endpoint. The magnet and selector are encoded statelessly in the URL.
 // progress is the live download fraction (0..1) of an already-started
 // torrent, or 0 when not applicable.
+// playKey is the /play path key of res: its infohash, or for a release
+// still unresolved (magnet-less, see prowlarr.Resolve) a SHA-256 of its
+// .torrent link — 64 hex chars, so it can never be taken for a v1 infohash.
+func playKey(res prowlarr.Result) string {
+	if res.MagnetURL != "" {
+		return res.InfoHash
+	}
+	sum := sha256.Sum256([]byte(res.DownloadURL))
+	return hex.EncodeToString(sum[:])
+}
+
 func (h *Handler) toStreamItem(externalURL string, q meta.Query, res prowlarr.Result, progress float64) streamItem {
 	base := strings.TrimSuffix(externalURL, "/")
 	v := url.Values{}
-	v.Set("magnet", res.MagnetURL)
+	if res.MagnetURL != "" {
+		v.Set("magnet", res.MagnetURL)
+	}
 	// Persist the content identity through play so later stream requests
 	// can surface this torrent as already-owned (see stream handler).
 	setContentIdentity(v, q)
@@ -620,7 +605,7 @@ func (h *Handler) toStreamItem(externalURL string, q meta.Query, res prowlarr.Re
 	if res.Indexer != "" {
 		v.Set("ix", res.Indexer)
 	}
-	playURL := fmt.Sprintf("%s/stremio/play/%s?%s", base, res.InfoHash, v.Encode())
+	playURL := fmt.Sprintf("%s/stremio/play/%s?%s", base, playKey(res), v.Encode())
 
 	// Surface the parsed resolution on the name's second line so Stremio's
 	// resolution badge and AIOStreams' grouping resolve cleanly.
